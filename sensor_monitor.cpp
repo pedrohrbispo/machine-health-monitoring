@@ -14,7 +14,7 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
-#define INITIAL_MESSAGE_INTERVAL 60 // Intervalo inicial da mensagem (em segundos)
+#define MESSAGE_INTERVAL 30 // Intervalo inicial da mensagem (em segundos)
 
 // Definição da estrutura de dados para um sensor
 struct SensorInfo {
@@ -144,7 +144,7 @@ int main(int argc, char* argv[]) {
         cpuJson["timestamp"] = timestamp;
         cpuJson["value"] = cpuUsage;
 
-        std::string cpuTopic = "/sensors/" + machineId + "/cpu_usage";
+        std::string cpuTopic = "/sensors/" + machineId + "/cpuUsage";
         mqtt::message cpuMsg(cpuTopic, cpuJson.dump(), QOS, false);
         client.publish(cpuMsg);
         std::clog << "CPU message published - topic: " << cpuTopic << " - message: " << cpuJson.dump() << std::endl;
@@ -154,13 +154,13 @@ int main(int argc, char* argv[]) {
         memoryJson["timestamp"] = timestamp;
         memoryJson["value"] = memoryUsage;
 
-        std::string memoryTopic = "/sensors/" + machineId + "/memory_usage";
+        std::string memoryTopic = "/sensors/" + machineId + "/memUsage";
         mqtt::message memoryMsg(memoryTopic, memoryJson.dump(), QOS, false);
         client.publish(memoryMsg);
         std::clog << "Memory message published - topic: " << memoryTopic << " - message: " << memoryJson.dump() << std::endl;
 
         // Sleep for some time.
-        std::this_thread::sleep_for(std::chrono::seconds(5)); // Adjust the interval as needed
+        std::this_thread::sleep_for(std::chrono::seconds(MESSAGE_INTERVAL)); // Adjust the interval as needed
     }
 
     return EXIT_SUCCESS;
