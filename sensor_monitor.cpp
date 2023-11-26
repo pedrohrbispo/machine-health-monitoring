@@ -127,10 +127,17 @@ int main(int argc, char* argv[]) {
     sendInitialMessage(client, machineId, sensors);
 
     while (true) {
-        // Get the current time in ISO 8601 format.
+        // Get the current time in ISO 8601 format in UTC.
         auto now = std::chrono::system_clock::now();
         std::time_t now_c = std::chrono::system_clock::to_time_t(now);
-        std::tm* now_tm = std::localtime(&now_c);
+        std::tm* now_tm = std::gmtime(&now_c); // Using gmtime to get UTC time
+
+        // Subtrair 3 horas
+        now_tm->tm_hour -= 3;
+        if (now_tm->tm_hour < 0) {
+            now_tm->tm_hour += 24; // Ajuste para garantir que o valor esteja no intervalo de 0 a 23
+        }
+
         std::stringstream ss;
         ss << std::put_time(now_tm, "%FT%TZ");
         std::string timestamp = ss.str();
@@ -144,7 +151,7 @@ int main(int argc, char* argv[]) {
         cpuJson["timestamp"] = timestamp;
         cpuJson["value"] = cpuUsage;
 
-        std::string cpuTopic = "/sensors/" + machineId + "/cpuUsage";
+        std::string cpuTopic = "/sensors/" + machineId + "/cpu_usage";
         mqtt::message cpuMsg(cpuTopic, cpuJson.dump(), QOS, false);
         client.publish(cpuMsg);
         std::clog << "CPU message published - topic: " << cpuTopic << " - message: " << cpuJson.dump() << std::endl;
@@ -154,7 +161,7 @@ int main(int argc, char* argv[]) {
         memoryJson["timestamp"] = timestamp;
         memoryJson["value"] = memoryUsage;
 
-        std::string memoryTopic = "/sensors/" + machineId + "/memUsage";
+        std::string memoryTopic = "/sensors/" + machineId + "/memory_usage";
         mqtt::message memoryMsg(memoryTopic, memoryJson.dump(), QOS, false);
         client.publish(memoryMsg);
         std::clog << "Memory message published - topic: " << memoryTopic << " - message: " << memoryJson.dump() << std::endl;

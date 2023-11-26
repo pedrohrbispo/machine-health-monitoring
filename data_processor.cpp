@@ -13,38 +13,48 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
-#define GRAPHITE_HOST "graphite"
+#define GRAPHITE_HOST "127.0.0.1"
 #define GRAPHITE_PORT 2003
 
 // Função para persistir a métrica no Graphite usando o protocolo Carbon
-void post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+int post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
     int graphite_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (graphite_socket == -1) {
         std::cerr << "Error: Failed to create socket\n";
-        return;
+        return -1; // Retorna um código de erro
     }
 
     struct sockaddr_in server_addr;
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(GRAPHITE_PORT);
-    inet_pton(AF_INET, GRAPHITE_HOST, &server_addr.sin_addr);
+    if (inet_pton(AF_INET, GRAPHITE_HOST, &server_addr.sin_addr) <= 0) {
+        std::cerr << "Error: Invalid address or address not supported\n";
+        close(graphite_socket);
+        return -1; // Retorna um código de erro
+    }
 
     if (connect(graphite_socket, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
         std::cerr << "Error: Failed to connect to Graphite\n";
         close(graphite_socket);
-        return;
+        return -1; // Retorna um código de erro
     }
 
+    std::string graphite_topic = "machines." + machine_id + "." + sensor_id;
     std::stringstream metric_stream;
-    metric_stream << machine_id << "." << sensor_id << " " << value << " " << timestamp_str << "\n";
+    metric_stream << graphite_topic << " " << value << " " << timestamp_str << "\n";
 
     std::string metric_data = metric_stream.str();
     ssize_t sent_bytes = send(graphite_socket, metric_data.c_str(), metric_data.size(), 0);
     if (sent_bytes == -1) {
-        std::cerr << "Error: Failed to send metric data\n";
+        std::cerr << "Error: Failed to send metric data for topic: " << graphite_topic << " with value: " << value << "\n";
+        close(graphite_socket);
+        return -1; // Retorna um código de erro
+    } else {
+        std::cout << "Metric published to Graphite successfully for topic: " << graphite_topic << " with value: " << value << "\n";
     }
 
     close(graphite_socket);
+    return 0; // Retorna sucesso
 }
 
 void process_sensor_data(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const int value) {
@@ -85,12 +95,13 @@ std::vector<std::string> split(const std::string &str, char delim) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string clientId = "DataProcessor";
+    std::string clientId = "clientId";
     mqtt::async_client client(BROKER_ADDRESS, clientId);
 
     // Create an MQTT callback.
     class callback : public virtual mqtt::callback {
     public:
+
         void message_arrived(mqtt::const_message_ptr msg) override {
             auto j = nlohmann::json::parse(msg->get_payload());
 
@@ -101,26 +112,22 @@ int main(int argc, char* argv[]) {
 
             std::string timestamp = j["timestamp"];
             int value = j["value"];
-
-            // Persistir métrica no Graphite
+            std::cout << "New message\n";
             post_metric(machine_id, sensor_id, timestamp, value);
-
-            // Processar os dados do sensor
-            process_sensor_data(machine_id, sensor_id, timestamp, value);
         }
     };
 
     callback cb;
     client.set_callback(cb);
-
-    // Connect to the MQTT broker and subscribe to the topic for sensor monitors
+    // Connect to the MQTT broker.
     mqtt::connect_options connOpts;
     connOpts.set_keep_alive_interval(20);
     connOpts.set_clean_session(true);
-    
+
     try {
-        client.connect(connOpts);
+        client.connect(connOpts)->wait();
         client.subscribe("/sensors/#", QOS);
+        std::cout << "Subscrided\n";
     } catch (mqtt::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
         return EXIT_FAILURE;
