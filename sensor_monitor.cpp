@@ -132,12 +132,6 @@ int main(int argc, char* argv[]) {
         std::time_t now_c = std::chrono::system_clock::to_time_t(now);
         std::tm* now_tm = std::gmtime(&now_c); // Using gmtime to get UTC time
 
-        // Subtrair 3 horas
-        now_tm->tm_hour -= 3;
-        if (now_tm->tm_hour < 0) {
-            now_tm->tm_hour += 24; // Ajuste para garantir que o valor esteja no intervalo de 0 a 23
-        }
-
         std::stringstream ss;
         ss << std::put_time(now_tm, "%FT%TZ");
         std::string timestamp = ss.str();

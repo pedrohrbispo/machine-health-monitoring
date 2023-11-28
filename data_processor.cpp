@@ -10,11 +10,21 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
 #define GRAPHITE_HOST "127.0.0.1"
 #define GRAPHITE_PORT 2003
+
+std::time_t string_to_time_t(const std::string& time_string) {
+    std::tm tm = {};
+    std::istringstream ss(time_string);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    return std::mktime(&tm);
+}
 
 // Função para persistir a métrica no Graphite usando o protocolo Carbon
 int post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
@@ -41,7 +51,7 @@ int post_metric(const std::string& machine_id, const std::string& sensor_id, con
 
     std::string graphite_topic = "machines." + machine_id + "." + sensor_id;
     std::stringstream metric_stream;
-    metric_stream << graphite_topic << " " << value << " " << timestamp_str << "\n";
+    metric_stream << graphite_topic << " " << value << " " << string_to_time_t(timestamp_str) << "\n";
 
     std::string metric_data = metric_stream.str();
     ssize_t sent_bytes = send(graphite_socket, metric_data.c_str(), metric_data.size(), 0);
