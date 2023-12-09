@@ -14,7 +14,7 @@
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
-#define MESSAGE_INTERVAL 30 // Intervalo inicial da mensagem (em segundos)
+#define MESSAGE_INTERVAL 10 // Intervalo inicial da mensagem (em segundos)
 
 // Definição da estrutura de dados para um sensor
 struct SensorInfo {

@@ -13,11 +13,15 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <deque>
+#include <cmath>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
 #define GRAPHITE_HOST "127.0.0.1"
 #define GRAPHITE_PORT 2003
+
+// CÁLCULO E CONVERSÃO -------------------------------------------------------------------------------------------
 
 std::time_t string_to_time_t(const std::string& time_string) {
     std::tm tm = {};
@@ -26,8 +30,50 @@ std::time_t string_to_time_t(const std::string& time_string) {
     return std::mktime(&tm);
 }
 
-// Função para persistir a métrica no Graphite usando o protocolo Carbon
-int post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const int value) {
+// Defina o tamanho da janela para a média móvel
+const size_t MOVING_AVERAGE_WINDOW = 5; // Por exemplo, uma janela de tamanho 5
+
+// Função para calcular a média móvel de um conjunto de valores
+double calculateMovingAverage(const std::deque<double>& values) {
+    if (values.empty()) {
+        return 0.0; // Se a fila estiver vazia, retorna 0 como média móvel
+    }
+
+    double sum = 0.0;
+    for (const auto& value : values) {
+        sum += value;
+    }
+
+    return sum / static_cast<double>(values.size());
+}
+
+
+// Função para calcular o Z-score de um valor em relação a um conjunto de dados
+double calculateZScore(double value, const std::deque<double>& values) {
+    if (values.empty()) {
+        return 0.0; // Se a fila estiver vazia, retorna 0 como Z-score
+    }
+
+    double mean = calculateMovingAverage(values);
+    double variance = 0.0;
+
+    for (const auto& val : values) {
+        variance += std::pow(val - mean, 2);
+    }
+
+    variance /= static_cast<double>(values.size());
+    double stdDeviation = std::sqrt(variance);
+
+    if (stdDeviation == 0.0) {
+        return 0.0; // Retorna 0 se o desvio padrão for zero para evitar divisão por zero
+    }
+
+    return (value - mean) / stdDeviation;
+}
+
+// POSTAR MÉTRICA ------------------------------------------------------------------------------------------
+
+int post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const double value) {
     int graphite_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (graphite_socket == -1) {
         std::cerr << "Error: Failed to create socket\n";
@@ -67,10 +113,45 @@ int post_metric(const std::string& machine_id, const std::string& sensor_id, con
     return 0; // Retorna sucesso
 }
 
-void process_sensor_data(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const int value) {
-    // Aqui você pode realizar o processamento dos dados do sensor
-    // Exemplo: Verificar se houve inatividade por um período específico
-    
+// PROCESSAMENTO DE DADOS ---------------------------------------------------------------------------------------
+
+void process_sensor_data(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, 
+const double value, std::deque<double>& sensorData) {
+    // Coleta de dados do sensor
+    sensorData.push_back(value);
+
+    // Mantenha o tamanho máximo da janela
+    if (sensorData.size() > MOVING_AVERAGE_WINDOW) {
+        sensorData.pop_front(); // Remova o valor mais antigo se exceder o tamanho da janela
+    }
+
+    // Calcular a média móvel do sensor
+    if (sensorData.size() > 0) {
+        double movingAverage = 0.0;
+        for (const auto& data : sensorData) {
+            movingAverage += data;
+        }
+        movingAverage /= sensorData.size();
+
+        std::cout << "Média móvel do uso de " << sensor_id << ": " << movingAverage << std::endl;
+        post_metric(machine_id, sensor_id + "_moving_average", timestamp, movingAverage);
+
+        // Detectar outliers usando Z-score
+        double zScore = calculateZScore(value, sensorData);
+        double zScoreThreshold = 5.0; // Defina o limite de Z-score para considerar um ponto como outlier
+
+        if (std::abs(zScore) > zScoreThreshold) {
+            // Se o valor atual for um outlier
+            std::cout << "Outlier detectado para o uso da CPU: " << value << std::endl;
+            post_metric(machine_id, "alarms." + sensor_id + "_outlier", timestamp, 1);
+        } else {
+            // Se não for um outlier
+            std::cout << "Uso normal de " << sensor_id << ": " << value << std::endl;
+        }
+    }
+}
+
+void process_sensor_alarm(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
     // Suponhamos que os dados do sensor chegam a cada 30 segundos
     const int expected_interval_seconds = 30;
     
@@ -79,20 +160,27 @@ void process_sensor_data(const std::string& machine_id, const std::string& senso
     std::string sensor_key = machine_id + "-" + sensor_id;
 
     auto now = std::chrono::system_clock::now();
-    auto received_time = std::chrono::system_clock::from_time_t(std::stoi(timestamp));
+    auto received_time = std::chrono::system_clock::from_time_t(string_to_time_t(timestamp));
     int seconds_since_last_timestamp = std::chrono::duration_cast<std::chrono::seconds>(now - received_time).count();
-
+    std::cout << "\n\n" << "--------------------->    Análise de dados para o sensor " << sensor_id << "   <---------------------\n";
+    std::cout << "Hora atual: " << timestamp << "\n";
     if (seconds_since_last_timestamp > expected_interval_seconds * 10) {
         // Gerar alarme de inatividade
         std::cout << "Alarme de inatividade para o sensor " << sensor_id << " da máquina " << machine_id << std::endl;
         post_metric(machine_id, "alarms.inactive", timestamp, 1); // Enviar alarme para o Graphite
     }
-
-    // Processamento personalizado
-    // Aqui você pode realizar qualquer processamento adicional conforme necessário
     // Exemplo: Cálculos de média móvel, detecção de outliers, análise de tendências, etc.
 }
 
+void process_sensor_data_cpu(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
+    static std::deque<double> cpuUsageData; // Use uma deque para armazenar valores anteriores
+    process_sensor_data(machine_id, sensor_id, timestamp, value, cpuUsageData);
+}
+
+void process_sensor_data_mem(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
+    static std::deque<double> memUsageData; // Use uma deque para armazenar valores anteriores
+    process_sensor_data(machine_id, sensor_id, timestamp, value, memUsageData);
+}
 
 std::vector<std::string> split(const std::string &str, char delim) {
     std::vector<std::string> tokens;
@@ -103,6 +191,8 @@ std::vector<std::string> split(const std::string &str, char delim) {
     }
     return tokens;
 }
+
+// MAIN ---------------------------------------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
     std::string clientId = "clientId";
@@ -121,9 +211,15 @@ int main(int argc, char* argv[]) {
             std::string sensor_id = topic_parts[3];
 
             std::string timestamp = j["timestamp"];
-            int value = j["value"];
-            std::cout << "New message\n";
+            double value = j["value"];
+
             post_metric(machine_id, sensor_id, timestamp, value);
+            process_sensor_alarm(machine_id, sensor_id, timestamp, value);
+            if (sensor_id == "cpu_usage") {
+                process_sensor_data_cpu(machine_id, sensor_id, timestamp, value);
+            } else {
+                 process_sensor_data_mem(machine_id, sensor_id, timestamp, value);
+            }
         }
     };
 
