@@ -15,6 +15,7 @@
 #include <sstream>
 #include <deque>
 #include <cmath>
+#include <ctime>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
@@ -28,6 +29,13 @@ std::time_t string_to_time_t(const std::string& time_string) {
     std::istringstream ss(time_string);
     ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
     return std::mktime(&tm);
+}
+
+std::tm string_to_tm(const std::string& timestamp) {
+    std::tm tm = {};
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+    return tm;
 }
 
 // Defina o tamanho da janela para a média móvel
@@ -71,6 +79,23 @@ double calculateZScore(double value, const std::deque<double>& values) {
     return (value - mean) / stdDeviation;
 }
 
+// Função para calcular a tendência usando regressão linear simples
+double calculateTrend(const std::deque<double>& values) {
+    size_t n = values.size();
+    double sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumXX = 0.0;
+
+    for (size_t i = 0; i < n; ++i) {
+        sumX += i + 1;
+        sumY += values[i];
+        sumXY += (i + 1) * values[i];
+        sumXX += (i + 1) * (i + 1);
+    }
+
+    double slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+
+    return slope;
+}
+
 // POSTAR MÉTRICA ------------------------------------------------------------------------------------------
 
 int post_metric(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp_str, const double value) {
@@ -106,7 +131,7 @@ int post_metric(const std::string& machine_id, const std::string& sensor_id, con
         close(graphite_socket);
         return -1; // Retorna um código de erro
     } else {
-        std::cout << "Metric published to Graphite successfully for topic: " << graphite_topic << " with value: " << value << "\n";
+        //std::cout << "Metric published to Graphite successfully for topic: " << graphite_topic << " with value: " << value << "\n";
     }
 
     close(graphite_socket);
@@ -134,7 +159,7 @@ const double value, std::deque<double>& sensorData) {
         movingAverage /= sensorData.size();
 
         std::cout << "Média móvel do uso de " << sensor_id << ": " << movingAverage << std::endl;
-        post_metric(machine_id, sensor_id + "_moving_average", timestamp, movingAverage);
+        post_metric(machine_id, sensor_id + "." + sensor_id + "_moving_average", timestamp, movingAverage);
 
         // Detectar outliers usando Z-score
         double zScore = calculateZScore(value, sensorData);
@@ -142,18 +167,23 @@ const double value, std::deque<double>& sensorData) {
 
         if (std::abs(zScore) > zScoreThreshold) {
             // Se o valor atual for um outlier
-            std::cout << "Outlier detectado para o uso da CPU: " << value << std::endl;
+            std::cout << "[ALARME] Outlier detectado para o uso da CPU: " << value << std::endl;
             post_metric(machine_id, "alarms." + sensor_id + "_outlier", timestamp, 1);
         } else {
             // Se não for um outlier
             std::cout << "Uso normal de " << sensor_id << ": " << value << std::endl;
         }
+
+        // Calcular a tendência dos valores
+        double trend = calculateTrend(sensorData);
+        std::cout << "Tendência do uso de " << sensor_id << ": " << trend << std::endl;
+        post_metric(machine_id, sensor_id + "." + sensor_id + "_trend", timestamp, trend);
     }
 }
 
 void process_sensor_alarm(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
     // Suponhamos que os dados do sensor chegam a cada 30 segundos
-    const int expected_interval_seconds = 30;
+    const int expected_interval_seconds = 10;
     
     // Lógica para alarme de inatividade
     static std::unordered_map<std::string, int> sensor_last_timestamps;
@@ -162,14 +192,14 @@ void process_sensor_alarm(const std::string& machine_id, const std::string& sens
     auto now = std::chrono::system_clock::now();
     auto received_time = std::chrono::system_clock::from_time_t(string_to_time_t(timestamp));
     int seconds_since_last_timestamp = std::chrono::duration_cast<std::chrono::seconds>(now - received_time).count();
-    std::cout << "\n\n" << "--------------------->    Análise de dados para o sensor " << sensor_id << "   <---------------------\n";
-    std::cout << "Hora atual: " << timestamp << "\n";
+    std::cout << "\n\n" << "--------------------->    Análise de métricas para o sensor " << sensor_id << "   <---------------------\n";
+    std::tm time = string_to_tm(timestamp);
+    std::cout << "Data: " << std::put_time(&time, "%d/%m/%Y, Hora: %H:%M:%S") << "\n";
     if (seconds_since_last_timestamp > expected_interval_seconds * 10) {
         // Gerar alarme de inatividade
-        std::cout << "Alarme de inatividade para o sensor " << sensor_id << " da máquina " << machine_id << std::endl;
-        post_metric(machine_id, "alarms.inactive", timestamp, 1); // Enviar alarme para o Graphite
+        std::cout << "[ALARME] Inatividade do sensor " << sensor_id << " da máquina " << machine_id << std::endl;
+        post_metric(machine_id, "alarms.inactive_" + sensor_id , timestamp, 1);
     }
-    // Exemplo: Cálculos de média móvel, detecção de outliers, análise de tendências, etc.
 }
 
 void process_sensor_data_cpu(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
@@ -213,7 +243,7 @@ int main(int argc, char* argv[]) {
             std::string timestamp = j["timestamp"];
             double value = j["value"];
 
-            post_metric(machine_id, sensor_id, timestamp, value);
+            post_metric(machine_id, sensor_id + "." + sensor_id, timestamp, value);
             process_sensor_alarm(machine_id, sensor_id, timestamp, value);
             if (sensor_id == "cpu_usage") {
                 process_sensor_data_cpu(machine_id, sensor_id, timestamp, value);
