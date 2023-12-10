@@ -141,13 +141,21 @@ int post_metric(const std::string& machine_id, const std::string& sensor_id, con
 // PROCESSAMENTO DE DADOS ---------------------------------------------------------------------------------------
 
 void process_sensor_data(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, 
-const double value, std::deque<double>& sensorData) {
+const double value, std::deque<double>& sensorData, std::deque<std::string>& sensorTimestamp) {
+
+    std::cout << "\n\n" << "--------------------->    Análise de dados para o sensor " << sensor_id << "   <---------------------\n";
+    std::tm time = string_to_tm(timestamp);
+    std::cout << "Data: " << std::put_time(&time, "%d/%m/%Y, Hora: %H:%M:%S") << std::endl;
+     std::cout << "ID da máquina: " << machine_id << std::endl;
+
     // Coleta de dados do sensor
     sensorData.push_back(value);
+    sensorTimestamp.push_back(timestamp);
 
     // Mantenha o tamanho máximo da janela
     if (sensorData.size() > MOVING_AVERAGE_WINDOW) {
         sensorData.pop_front(); // Remova o valor mais antigo se exceder o tamanho da janela
+        sensorTimestamp.pop_front();
     }
 
     // Calcular a média móvel do sensor
@@ -163,7 +171,7 @@ const double value, std::deque<double>& sensorData) {
 
         // Detectar outliers usando Z-score
         double zScore = calculateZScore(value, sensorData);
-        double zScoreThreshold = 5.0; // Defina o limite de Z-score para considerar um ponto como outlier
+        double zScoreThreshold = 1.0; // Defina o limite de Z-score para considerar um ponto como outlier
 
         if (std::abs(zScore) > zScoreThreshold) {
             // Se o valor atual for um outlier
@@ -173,43 +181,42 @@ const double value, std::deque<double>& sensorData) {
             // Se não for um outlier
             std::cout << "Uso normal de " << sensor_id << ": " << value << std::endl;
         }
-
         // Calcular a tendência dos valores
         double trend = calculateTrend(sensorData);
         std::cout << "Tendência do uso de " << sensor_id << ": " << trend << std::endl;
         post_metric(machine_id, sensor_id + "." + sensor_id + "_trend", timestamp, trend);
+        std::cout << "----------------------------------------------------------------------------------------------\n";
     }
 }
 
-void process_sensor_alarm(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
-    // Suponhamos que os dados do sensor chegam a cada 30 segundos
-    const int expected_interval_seconds = 10;
-    
-    // Lógica para alarme de inatividade
-    static std::unordered_map<std::string, int> sensor_last_timestamps;
-    std::string sensor_key = machine_id + "-" + sensor_id;
+void process_sensor_alarm(const std::string& machine_id, const std::string& sensor_id, const std::deque<std::string>* sensorTimestamps) {
+    const int expected_interval_seconds = 30; // intervalo de chegada esperado
+    const int max_expected_delay = expected_interval_seconds; // máximo de atraso esperado para gerar um alarme
 
-    auto now = std::chrono::system_clock::now();
-    auto received_time = std::chrono::system_clock::from_time_t(string_to_time_t(timestamp));
-    int seconds_since_last_timestamp = std::chrono::duration_cast<std::chrono::seconds>(now - received_time).count();
-    std::cout << "\n\n" << "--------------------->    Análise de métricas para o sensor " << sensor_id << "   <---------------------\n";
-    std::tm time = string_to_tm(timestamp);
-    std::cout << "Data: " << std::put_time(&time, "%d/%m/%Y, Hora: %H:%M:%S") << "\n";
-    if (seconds_since_last_timestamp > expected_interval_seconds * 10) {
-        // Gerar alarme de inatividade
-        std::cout << "[ALARME] Inatividade do sensor " << sensor_id << " da máquina " << machine_id << std::endl;
-        post_metric(machine_id, "alarms.inactive_" + sensor_id , timestamp, 1);
+    if (sensorTimestamps != nullptr && !sensorTimestamps->empty()) {
+        std::string last_timestamp = sensorTimestamps->back();
+        std::time_t last_time = string_to_time_t(last_timestamp);
+        std::time_t current_time = std::time(nullptr);
+        int seconds_since_last_timestamp = current_time - last_time;
+
+        if (seconds_since_last_timestamp > max_expected_delay) {
+            // Gerar alarme se o atraso for maior do que o esperado
+            std::cout << "[ALARME] Dados do sensor " << sensor_id << " da máquina " << machine_id << " não foram recebidos por mais de 10 períodos de tempo previstos.\n";
+            post_metric(machine_id, "alarms.inactive_" + sensor_id, last_timestamp, 1);
+        }
     }
 }
 
+std::deque<std::string> cpuUsageTimestamps;
 void process_sensor_data_cpu(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
     static std::deque<double> cpuUsageData; // Use uma deque para armazenar valores anteriores
-    process_sensor_data(machine_id, sensor_id, timestamp, value, cpuUsageData);
+    process_sensor_data(machine_id, sensor_id, timestamp, value, cpuUsageData, cpuUsageTimestamps);
 }
 
+std::deque<std::string> memUsageTimestamps;
 void process_sensor_data_mem(const std::string& machine_id, const std::string& sensor_id, const std::string& timestamp, const double value) {
     static std::deque<double> memUsageData; // Use uma deque para armazenar valores anteriores
-    process_sensor_data(machine_id, sensor_id, timestamp, value, memUsageData);
+    process_sensor_data(machine_id, sensor_id, timestamp, value, memUsageData, memUsageTimestamps);
 }
 
 std::vector<std::string> split(const std::string &str, char delim) {
@@ -220,6 +227,39 @@ std::vector<std::string> split(const std::string &str, char delim) {
         tokens.push_back(token);
     }
     return tokens;
+}
+
+
+std::mutex mtx;
+std::vector<std::string> monitored_sensors;
+
+void check_sensor_inactivity(const std::string& machine_id, const std::string& sensor_id, const std::deque<std::string>* sensorTimestamps) {
+    // Função para verificar a inatividade do sensor
+    while (true) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            process_sensor_alarm(machine_id, sensor_id, sensorTimestamps);
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(20));
+    }
+}
+
+void add_monitored_sensor(const std::string& sensor_id) {
+    std::lock_guard<std::mutex> lock(mtx);
+    monitored_sensors.push_back(sensor_id);
+}
+
+bool is_sensor_monitored(const std::string& sensor_id) {
+    std::lock_guard<std::mutex> lock(mtx);
+    return std::find(monitored_sensors.begin(), monitored_sensors.end(), sensor_id) != monitored_sensors.end();
+}
+
+void process_message(const std::string& machine_id, const std::string& sensor_id, const std::deque<std::string>* sensorTimestamps) {
+    if (!is_sensor_monitored(sensor_id)) {
+        std::thread sensor_thread(check_sensor_inactivity, machine_id, sensor_id, sensorTimestamps);
+        sensor_thread.detach();
+        add_monitored_sensor(sensor_id);
+    }
 }
 
 // MAIN ---------------------------------------------------------------------------------------------------------
@@ -244,11 +284,12 @@ int main(int argc, char* argv[]) {
             double value = j["value"];
 
             post_metric(machine_id, sensor_id + "." + sensor_id, timestamp, value);
-            process_sensor_alarm(machine_id, sensor_id, timestamp, value);
             if (sensor_id == "cpu_usage") {
                 process_sensor_data_cpu(machine_id, sensor_id, timestamp, value);
+                process_message(machine_id, sensor_id, &cpuUsageTimestamps);
             } else {
                  process_sensor_data_mem(machine_id, sensor_id, timestamp, value);
+                 process_message(machine_id, sensor_id, &memUsageTimestamps);
             }
         }
     };
