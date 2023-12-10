@@ -84,6 +84,10 @@ double calculateTrend(const std::deque<double>& values) {
     size_t n = values.size();
     double sumX = 0.0, sumY = 0.0, sumXY = 0.0, sumXX = 0.0;
 
+    if (n < 2) {
+        return 0.0;
+    }
+
     for (size_t i = 0; i < n; ++i) {
         sumX += i + 1;
         sumY += values[i];
