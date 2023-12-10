@@ -175,7 +175,7 @@ const double value, std::deque<double>& sensorData, std::deque<std::string>& sen
 
         if (std::abs(zScore) > zScoreThreshold) {
             // Se o valor atual for um outlier
-            std::cout << "[ALARME] Outlier detectado para o uso da CPU: " << value << std::endl;
+            std::cout << "[ALARME] Outlier detectado: " << value << std::endl;
             post_metric(machine_id, "alarms." + sensor_id + "_outlier", timestamp, 1);
         } else {
             // Se não for um outlier
@@ -198,11 +198,17 @@ void process_sensor_alarm(const std::string& machine_id, const std::string& sens
         std::time_t last_time = string_to_time_t(last_timestamp);
         std::time_t current_time = std::time(nullptr);
         int seconds_since_last_timestamp = current_time - last_time;
+        auto now = std::chrono::system_clock::now();
+        std::time_t now_c = std::chrono::system_clock::to_time_t(now);
+        std::tm* now_tm = std::gmtime(&now_c);
+        std::stringstream ss;
+        ss << std::put_time(now_tm, "%FT%TZ");
+        std::string timestamp = ss.str();
 
         if (seconds_since_last_timestamp > max_expected_delay) {
             // Gerar alarme se o atraso for maior do que o esperado
             std::cout << "[ALARME] Dados do sensor " << sensor_id << " da máquina " << machine_id << " não foram recebidos por mais de 10 períodos de tempo previstos.\n";
-            post_metric(machine_id, "alarms.inactive_" + sensor_id, last_timestamp, 1);
+            post_metric(machine_id, "alarms.inactive_" + sensor_id, timestamp, 1);
         }
     }
 }
