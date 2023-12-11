@@ -22,6 +22,10 @@
 #define GRAPHITE_HOST "127.0.0.1"
 #define GRAPHITE_PORT 2003
 
+// Definição de cores ANSI para o console
+#define RESET   "\033[0m"
+#define RED     "\033[31m"      /* Red */
+
 // CÁLCULO E CONVERSÃO -------------------------------------------------------------------------------------------
 
 std::time_t string_to_time_t(const std::string& time_string) {
@@ -199,7 +203,7 @@ const double value, std::deque<double>& sensorData, std::deque<std::string>& sen
 
         if (std::abs(zScore) > zScoreThreshold) {
             // Se o valor atual for um outlier
-            std::cout << "[ALARME] Outlier detectado: " << value << std::endl;
+            std::cout << RED << "[ALARME]" << RESET << " Outlier detectado: " << value << std::endl;
             post_metric(machine_id, "alarms." + sensor_id + "_outlier", timestamp, 1);
         } else {
             // Se não for um outlier
@@ -237,8 +241,8 @@ void process_sensor_alarm(const std::string& machine_id, const std::string& sens
 
         if (seconds_since_last_timestamp > max_expected_delay) {
             // Gerar alarme se o atraso for maior do que o esperado
-            std::cout << "\n[ALARME] Dados do sensor " << sensor_name << " da máquina " << machine_id << " não foram recebidos por mais de 10 períodos de tempo previstos.\n";
-            post_metric(machine_id, "alarms.inactive_" + sensor_id, timestamp, 1);
+            std::cout << RED << "\n⚠️ - [ALARME] " << RESET << "Dados do sensor " << sensor_name << " da máquina " << machine_id << " não foram recebidos por mais de 10 períodos de tempo previstos." << std::endl;
+            post_metric(machine_id, "alarms.inactive_" + sensor_name, timestamp, 1);
         }
     }
     mtx.unlock();
