@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <fstream>
 #include <sstream>
+#include <random>
 
 #define QOS 1
 #define BROKER_ADDRESS "tcp://localhost:1883"
@@ -96,7 +97,15 @@ void sendInitialMessage(mqtt::client& client, const std::string& machineId, cons
 
 
 int main(int argc, char* argv[]) {
-    std::string clientId = "sensor-monitor";
+    std::string machineId;
+
+    if (argc != 2) {
+        std::cout << "Por favor, forneça o machine_id como argumento." << std::endl;
+        return EXIT_FAILURE;
+    } else {
+        machineId = argv[1];
+    }
+    std::string clientId = "sensor-monitor-" + machineId;
     mqtt::client client(BROKER_ADDRESS, clientId);
 
     // Connect to the MQTT broker.
@@ -111,11 +120,6 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
     std::clog << "connected to the broker" << std::endl;
-
-    // Get the unique machine identifier, in this case, the hostname.
-    char hostname[1024];
-    gethostname(hostname, 1024);
-    std::string machineId(hostname);
 
     // Definição dos sensores a serem monitorados
     std::vector<SensorInfo> sensors = {
@@ -161,7 +165,7 @@ int main(int argc, char* argv[]) {
         std::clog << "Memory message published - topic: " << memoryTopic << " - message: " << memoryJson.dump() << std::endl;
 
         // Sleep for some time.
-        std::this_thread::sleep_for(std::chrono::seconds(MESSAGE_INTERVAL)); // Adjust the interval as needed
+        std::this_thread::sleep_for(std::chrono::seconds(MESSAGE_INTERVAL));
     }
 
     return EXIT_SUCCESS;
