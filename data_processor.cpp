@@ -1,6 +1,3 @@
-// Júlia de Castro, 2020056830
-// Igor Miranda Sartori, 2020056784
-
 #include <iostream>
 #include <cstdlib>
 #include <chrono>
