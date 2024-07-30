@@ -1,16 +1,16 @@
 import json
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 import paho.mqtt.client as mqtt
 from collections import deque
 import psycopg2
 from dateutil import parser
+from typing import Deque
 
 QOS = 1
 BROKER_ADDRESS = "localhost"
-
 MOVING_AVERAGE_WINDOW = 5
 
 # Definição de cores ANSI para o console
@@ -56,7 +56,7 @@ def post_metric(machine_id, sensor_id, timestamp_str, value):
     INSERT INTO metrics (machine_id, sensor_id, timestamp, value)
     VALUES (%s, %s, %s, %s)
     '''
-    timestamp = parser.parse(timestamp_str)  # Usar dateutil.parser para analisar a string de data e hora
+    timestamp = parser.parse(timestamp_str).replace(tzinfo=timezone.utc)  # Garantir que o datetime seja aware
     cursor.execute(insert_query, (machine_id, sensor_id, timestamp, value))
     
     conn.commit()
@@ -64,51 +64,57 @@ def post_metric(machine_id, sensor_id, timestamp_str, value):
     conn.close()
     return 0
 
-# Função para calcular a média móvel de um conjunto de valores
-def calculateMovingAverage(values):
+def calculateMovingAverage(values: Deque[float]) -> float:
     if not values:
-        return 0.0
-    return sum(values) / len(values)
+        return 0.0  # Se a fila estiver vazia, retorna 0 como média móvel
 
-# Função para calcular o Z-score de um valor em relação a um conjunto de dados
-def calculateZScore(value, values):
+    total = sum(values)
+    return total / len(values)
+
+def calculateZScore(value: float, values: Deque[float]) -> float:
     if not values:
-        return 0.0
+        return 0.0  # Se a fila estiver vazia, retorna 0 como Z-score
 
     mean = calculateMovingAverage(values)
     variance = sum((val - mean) ** 2 for val in values) / len(values)
-    stdDeviation = np.sqrt(variance)
+    std_deviation = np.sqrt(variance)
 
-    if stdDeviation == 0.0:
-        return 0.0
+    if std_deviation == 0.0:
+        return 0.0  # Retorna 0 se o desvio padrão for zero para evitar divisão por zero
 
-    return (value - mean) / stdDeviation
+    return (value - mean) / std_deviation
 
-# Função para calcular a tendência usando regressão linear simples
-def calculateTrend(values):
+def calculateTrend(values: Deque[float]) -> float:
     n = len(values)
+    sum_x = 0.0
+    sum_y = 0.0
+    sum_xy = 0.0
+    sum_xx = 0.0
+
     if n < 2:
         return 0.0
 
-    sumX = sum(range(1, n + 1))
-    sumY = sum(values)
-    sumXY = sum((i + 1) * values[i] for i in range(n))
-    sumXX = sum((i + 1) ** 2 for i in range(n))
+    for i in range(n):
+        x = i + 1
+        y = values[i]
+        sum_x += x
+        sum_y += y
+        sum_xy += x * y
+        sum_xx += x * x
 
-    slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX ** 2)
+    slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x)
 
     return slope
 
-# Função para processar os dados do sensor
 def process_sensor_data(machine_id, sensor_id, timestamp, value, sensorData, sensorTimestamp):
     print(f"\n\n--------------------->    Análise de dados para o sensor {sensor_id}   <---------------------")
-    time = parser.parse(timestamp)  # Usar dateutil.parser para analisar a string de data e hora
+    time = parser.parse(timestamp).replace(tzinfo=timezone.utc)  # Garantir que o datetime seja aware
     print(f"Data: {time.strftime('%d/%m/%Y, Hora: %H:%M:%S')}")
     print(f"ID da máquina: {machine_id}")
 
     sensorData.append(value)
     if len(sensorData) > MOVING_AVERAGE_WINDOW:
-        sensorData.pop(0)
+        sensorData.popleft()  # Usar popleft() para deque
 
     if sensorData:
         movingAverage = calculateMovingAverage(sensorData)
@@ -129,17 +135,15 @@ def process_sensor_data(machine_id, sensor_id, timestamp, value, sensorData, sen
         post_metric(machine_id, f"{sensor_id}.{sensor_id}_trend", timestamp, trend)
         print("----------------------------------------------------------------------------------------------")
 
-cpuUsageTimestamps = deque()
+cpuUsageData = deque()
 def process_sensor_data_cpu(machine_id, sensor_id, timestamp, value):
-    global cpuUsageTimestamps
-    cpuUsageData = deque()
-    process_sensor_data(machine_id, sensor_id, timestamp, value, cpuUsageData, cpuUsageTimestamps)
+    global cpuUsageData
+    process_sensor_data(machine_id, sensor_id, timestamp, value, cpuUsageData, None)
 
-memUsageTimestamps = deque()
+memUsageData = deque()
 def process_sensor_data_mem(machine_id, sensor_id, timestamp, value):
-    global memUsageTimestamps
-    memUsageData = deque()
-    process_sensor_data(machine_id, sensor_id, timestamp, value, memUsageData, memUsageTimestamps)
+    global memUsageData
+    process_sensor_data(machine_id, sensor_id, timestamp, value, memUsageData, None)
 
 def check_sensor_inactivity(machine_id, sensor_id, sensor_name):
     expected_interval_seconds = 30
@@ -147,11 +151,11 @@ def check_sensor_inactivity(machine_id, sensor_id, sensor_name):
 
     while True:
         time.sleep(20)
-        current_time = datetime.utcnow()
+        current_time = datetime.utcnow().replace(tzinfo=timezone.utc)  # Garantir que o datetime seja aware
         with threading.Lock():
             last_timestamp = next((sensor['last_timestamp'] for sensor in monitored_sensors if sensor['sensor_id'] == sensor_id), None)
             if last_timestamp:
-                last_time = parser.parse(last_timestamp)  # Usar dateutil.parser para analisar a string de data e hora
+                last_time = parser.parse(last_timestamp).replace(tzinfo=timezone.utc)  # Garantir que o datetime seja aware
                 seconds_since_last_timestamp = (current_time - last_time).total_seconds()
 
                 if seconds_since_last_timestamp > max_expected_delay:
